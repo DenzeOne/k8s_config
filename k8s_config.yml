@@ -1,166 +1,172 @@
 ---
-- name : disable swapspace for kuberntetes
-  command: swapoff -a
+- name: Configure k8s on Rocky Linux
+  hosts: localhost
+  become: yes
 
-- name: disable swap in fstab
-  ansible.builtin.lineinfile:
-    path: /etc/fstab
-    state: absent
-    regexp: '^/dev/mapper/rl-swap'
+  tasks:
 
-- name: set up containerd prerequisites
-  blockinfile:
-    path: "/etc/modules-load.d/containerd.conf"
-    create: true
-    block: |
-      overlay
-      br_netfilter   
+  - name : Disable swapspace for kuberntetes
+    ansible.builtin.command: swapoff -a
 
-- name: add overlay and br_netfilter
-  community.general.modprobe:
-    name: "{{ item }}"
-    state: present 
-  loop:
-    - overlay
-    - br_netfilter 
+  - name: disable swap in fstab
+    ansible.builtin.lineinfile:
+      path: /etc/fstab
+      state: absent
+      regexp: '^/dev/mapper/rl-swap'
 
-- name: Set sysctl for all.accept_ra=0
-  sysctl:
-    name: "{{ item }}"
-    value: 1
-    sysctl_set: true
-    state: present
-    sysctl_file: /etc/sysctl.d/k8s.conf
-    reload: true
-  with_items:
-    -  net.ipv4.ip_forward
-    -  net.bridge.bridge-nf-call-ip6tables
-    -  net.bridge.bridge-nf-call-iptables
+  - name: set up containerd prerequisites
+    ansible.builtin.blockinfile:
+      path: "/etc/modules-load.d/containerd.conf"
+      create: true
+      block: |
+        overlay
+        br_netfilter  
 
-- name: check if docker repos exists
-  stat:
-    path: /etc/yum.repos.d/docker-ce.repo
-  register:
-    repo_exists
+  - name: add overlay and br_netfilter
+    community.general.modprobe:
+      name: "{{ item }}"
+      state: present
+    loop:
+      - overlay
+      - br_netfilter
 
-- name: add docker repository
-  ansible.builtin.shell: |
-    sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-    sudo dnf makecache
-  when: not repo_exists.stat.exists
-  
-- name: install containerd.io
-  ansible.builtin.dnf:
-    name: containerd.io
-    state: present
+  - name: Set sysctl for all.accept_ra=0
+    ansible.posix.sysctl:
+      name: "{{ item }}"
+      value: 1
+      sysctl_set: true
+      state: present
+      sysctl_file: /etc/sysctl.d/k8s.conf
+      reload: true
+    with_items:
+      -  net.ipv4.ip_forward
+      -  net.bridge.bridge-nf-call-ip6tables
+      -  net.bridge.bridge-nf-call-iptables
 
-- name: Ensure containerd is started and enabled at boot.
-  service:
-    name: containerd
-    state: started
-    enabled: true
+  - name: check if docker repos exists
+    ansible.builtin.stat:
+      path: /etc/yum.repos.d/docker-ce.repo
+    register:
+      repo_exists
 
-- name: Ensure containerd config directory exists.
-  file:
-    path: /etc/containerd
-    state: directory
-  register: containerd_dir
+  - name: add docker repository
+    ansible.builtin.shell: |
+      sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+      sudo dnf makecache
+    when: not repo_exists.stat.exists
 
-- name: Get defaults from containerd.
-  command: containerd config default
-  changed_when: false
+  - name: install containerd.io
+    ansible.builtin.dnf:
+      name: containerd.io
+      state: present
 
-- name: Prepare containerd/config.toml from default config
-  copy:
-    dest: /tmp/containerd_config.toml
-    content: "{{ containerd_config_default.stdout }}"
-  changed_when: false
+  - name: Ensure containerd is started and enabled at boot.
+    ansible.builtin.service:
+      name: containerd
+      state: started
+      enabled: true
 
-- name: Set Cgroup driver to systemd
-  lineinfile:
-    insertafter: '.*\[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options\]$'
-    line: '          SystemdCgroup = true'
-    state: present
-    path: /tmp/containerd_config.toml
-  changed_when: false
+  - name: Ensure containerd config directory exists.
+    ansible.builtin.file:
+      path: /etc/containerd
+      state: directory
+    register: containerd_dir
 
-- name: Make sure  SystemdCgroup = false is not set
-  ansible.builtin.lineinfile:
-    path: /tmp/containerd_config.toml
-    state: absent
-    line: '            SystemdCgroup = false'
-  notify: restart containerd
-  changed_when: false
+  - name: Get defaults from containerd.
+    ansible.builtin.command: containerd config default
+    changed_when: false
 
-- name: Copy config.toml to /etc/containerd
-  copy:
-    remote_src: true
-    src: /tmp/containerd_config.toml
-    dest: /etc/containerd/config.toml
-  notify: restart containerd
+  - name: Prepare containerd/config.toml from default config
+    ansible.builtin.copy:
+      dest: /tmp/containerd_config.toml
+      content: "{{ containerd_config_default.stdout }}"
+    changed_when: false
 
-- name: Cleanup temporary file
-  file:
-    path: /tmp/containerd_config.toml
-    state: absent
-  changed_when: false
+  - name: Set Cgroup driver to systemd
+    ansible.builtin.lineinfile:
+      insertafter: '.*\[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options\]$'
+      line: '          SystemdCgroup = true'
+      state: present
+      path: /tmp/containerd_config.toml
+    changed_when: false
 
-- name: Ensure containerd is restarted immediately if necessary.
-  meta: flush_handlers
+  - name: Make sure  SystemdCgroup = false is not set
+    ansible.builtin.lineinfile:
+      path: /tmp/containerd_config.toml
+      state: absent
+      line: '            SystemdCgroup = false'
+    notify: restart containerd
+    changed_when: false
 
-- name: check in kubernetes repos exists
-  stat:
-    path: /etc/yum.repos.d/kubernetes.repo
-  register:
-    kubernetes_repo_exists
+  - name: Copy config.toml to /etc/containerd
+    ansible.builtin.copy:
+      remote_src: true
+      src: /tmp/containerd_config.toml
+      dest: /etc/containerd/config.toml
+    notify: restart containerd
 
-- name: create kubernetes repo file
-  file:
-    path: "/etc/yum.repos.d/kubernetes.repo"
-    state: "touch"
-  when: not kubernetes_repo_exists.stat.exists  
+  - name: Cleanup temporary file
+    ansible.builtin.file:
+      path: /tmp/containerd_config.toml
+      state: absent
+    changed_when: false
 
-- name: write repository information in the kubernetes repo file
-  blockinfile:
-    path: "/etc/yum.repos.d/kubernetes.repo"
-    block: |
-      [kubernetes]
-      name=Kubernetes
-      baseurl=https://pkgs.k8s.io/core:/stable:/v1.30/rpm/
-      enabled=1
-      gpgcheck=1
-      gpgkey=https://pkgs.k8s.io/core:/stable:/v1.30/rpm/repodata/repomd.xml.key
-      exclude=kubelet kubeadm kubectl cri-tools kubernetes-cni
+  - name: Ensure containerd is restarted immediately if necessary.
+    ansible.builtin.meta: flush_handlers
 
-- name: make kubernetes repository cache
-  ansible.builtin.shell: |
-    sudo dnf makecache
-  when: not kubernetes_repo_exists.stat.exists
+  - name: check in kubernetes repos exists
+    ansible.builtin.stat:
+      path: /etc/yum.repos.d/kubernetes.repo
+    register:
+      kubernetes_repo_exists
 
-- name: add alias and bash-completion for kubectl
-  lineinfile:
-    path: /home/devops/.bashrc
-    line: "{{ item.line }}"
-    state: present
-  with_items:
-    - line : ''
-    - line: 'source /usr/share/bash-completion/bash_completion'
-    - line: 'source <(kubectl completion bash)'
-    - line: 'alias k=kubectl'
-    - line: 'complete -o default -F __start_kubectl k'
+  - name: create kubernetes repo file
+    ansible.builtin.file:
+      path: "/etc/yum.repos.d/kubernetes.repo"
+      state: "touch"
+    when: not kubernetes_repo_exists.stat.exists  
 
-- name: Install with disable_excludes
-  ansible.builtin.dnf:
-    name: "{{ item }}"
-    state: present
-    disable_excludes: 'kubernetes'
-  with_items:
-    - kubelet
-    - kubeadm
-    - kubectl
+  - name: write repository information in the kubernetes repo file
+    ansible.builtin.blockinfile:
+      path: "/etc/yum.repos.d/kubernetes.repo"
+      block: |
+        [kubernetes]
+        name=Kubernetes
+        baseurl=https://pkgs.k8s.io/core:/stable:/v1.31/rpm/
+        enabled=1
+        gpgcheck=1
+        gpgkey=https://pkgs.k8s.io/core:/stable:/v1.31/rpm/repodata/repomd.xml.key
+        exclude=kubelet kubeadm kubectl cri-tools kubernetes-cni
 
-- name: start kubelet service
-  ansible.builtin.service:
-    name: kubelet
-    enabled: true
-    state: started
+  - name: make kubernetes repository cache
+    ansible.builtin.shell: |
+      sudo dnf makecache
+    when: not kubernetes_repo_exists.stat.exists
+
+  - name: add alias and bash-completion for kubectl
+    ansible.builtin.lineinfile:
+      path: /home/devops/.bashrc
+      line: "{{ item.line }}"
+      state: present
+    with_items:
+      - line : ''
+      - line: 'source /usr/share/bash-completion/bash_completion'
+      - line: 'source <(kubectl completion bash)'
+      - line: 'alias k=kubectl'
+      - line: 'complete -o default -F __start_kubectl k'
+
+  - name: Install with disable_excludes
+    ansible.builtin.dnf:
+      name: "{{ item }}"
+      state: present
+      disable_excludes: 'kubernetes'
+    with_items:
+      - kubelet
+      - kubeadm
+      - kubectl
+
+  - name: start kubelet service
+    ansible.builtin.service:
+      name: kubelet
+      enabled: true
+      state: started
