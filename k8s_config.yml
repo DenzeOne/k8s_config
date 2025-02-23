@@ -75,6 +75,7 @@
   - name: Get defaults from containerd.
     ansible.builtin.command: containerd config default
     changed_when: false
+    register: containerd_config_default
 
   - name: Prepare containerd/config.toml from default config
     ansible.builtin.copy:
